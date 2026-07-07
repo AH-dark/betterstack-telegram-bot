@@ -4,13 +4,13 @@ use std::io::Read;
 
 use axum::http::StatusCode;
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use teloxide::prelude::*;
 use tower_http::trace::TraceLayer;
 
-use crate::betterstack::webhook::{betterstack_webhook_handler, WebhookAppState};
+use crate::betterstack::webhook::{WebhookAppState, betterstack_webhook_handler};
 use crate::config::Config;
 use crate::error::{AppError, Result};
 
@@ -118,8 +118,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::config::{LogFormat, Secret};
-    use crate::storage::memory::MemoryStore;
     use crate::storage::IncidentStore;
+    use crate::storage::memory::MemoryStore;
     use crate::telegram::{FakeNotifier, Notifier};
 
     fn test_config(api_base: &str) -> Config {
@@ -257,9 +257,11 @@ mod tests {
         let token = resolve_secret_token(&config);
 
         assert_eq!(token.len(), 64);
-        assert!(token
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert!(
+            token
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
         assert!(token.bytes().any(|byte| byte != b'0'));
     }
 }

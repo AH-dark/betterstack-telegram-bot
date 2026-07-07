@@ -1,7 +1,7 @@
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use teloxide::utils::html;
 
-use crate::domain::callback::{encode, Action};
+use crate::domain::callback::{Action, encode};
 use crate::domain::incident::{IncidentRecord, IncidentStatus};
 
 /// Status emoji for display.

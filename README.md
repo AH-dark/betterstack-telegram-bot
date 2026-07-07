@@ -200,4 +200,4 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 
 ## License
 
-MIT
+This project is licensed under the GNU Affero General Public License v3.0 — see the [LICENSE](LICENSE) file for details.

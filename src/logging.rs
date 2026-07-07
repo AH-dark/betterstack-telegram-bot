@@ -1,5 +1,5 @@
 use crate::config::LogFormat;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 /// Initialize the global tracing subscriber.
 ///

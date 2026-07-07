@@ -121,10 +121,10 @@ async fn process_locked_webhook(
 
     let result = process_marked_webhook(state, payload, trigger).await;
 
-    if result.is_err() {
-        if let Err(err) = state.store.unmark_event(incident_id, &payload.event).await {
-            tracing::debug!(error = %err, incident_id = %incident_id, event = %payload.event, "failed to unmark webhook dedup key");
-        }
+    if result.is_err()
+        && let Err(err) = state.store.unmark_event(incident_id, &payload.event).await
+    {
+        tracing::debug!(error = %err, incident_id = %incident_id, event = %payload.event, "failed to unmark webhook dedup key");
     }
 
     result
@@ -497,16 +497,16 @@ mod tests {
 mod handler_tests {
     use super::*;
 
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::post;
-    use axum::Router;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
     use crate::error::{AppError, Result};
-    use crate::storage::memory::MemoryStore;
     use crate::storage::LockGuard;
+    use crate::storage::memory::MemoryStore;
     use crate::telegram::{FakeNotifier, NotifierCall};
 
     struct FailingGetStore {
@@ -853,10 +853,12 @@ mod handler_tests {
 
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(store.unmark_calls(), 1);
-        assert!(store
-            .mark_event_once("12345", "incident_started", Duration::from_secs(60))
-            .await
-            .expect("mark should succeed"));
+        assert!(
+            store
+                .mark_event_once("12345", "incident_started", Duration::from_secs(60))
+                .await
+                .expect("mark should succeed")
+        );
     }
 
     #[tokio::test]
@@ -880,14 +882,18 @@ mod handler_tests {
             resolved_by: Some("bob".to_string()),
         };
         store.upsert(&rec).await.expect("record should upsert");
-        assert!(store
-            .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
-            .await
-            .expect("mark should succeed"));
-        assert!(store
-            .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
-            .await
-            .expect("mark should succeed"));
+        assert!(
+            store
+                .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
+                .await
+                .expect("mark should succeed")
+        );
+        assert!(
+            store
+                .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
+                .await
+                .expect("mark should succeed")
+        );
 
         let resp = app
             .oneshot(webhook_request(Some("secret"), INCIDENT_REOPENED_JSON))
@@ -905,13 +911,17 @@ mod handler_tests {
         assert!(rec.acknowledged_by.is_none());
         assert!(rec.resolved_at.is_none());
         assert!(rec.resolved_by.is_none());
-        assert!(store
-            .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
-            .await
-            .expect("mark should succeed"));
-        assert!(store
-            .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
-            .await
-            .expect("mark should succeed"));
+        assert!(
+            store
+                .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
+                .await
+                .expect("mark should succeed")
+        );
+        assert!(
+            store
+                .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
+                .await
+                .expect("mark should succeed")
+        );
     }
 }

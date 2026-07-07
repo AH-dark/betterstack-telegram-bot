@@ -6,7 +6,7 @@ use teloxide::prelude::*;
 use teloxide::requests::RequesterExt;
 use teloxide::types::Update;
 
-use super::{handler, Notifier};
+use super::{Notifier, handler};
 use crate::betterstack::client::BetterStackClient;
 use crate::storage::IncidentStore;
 
