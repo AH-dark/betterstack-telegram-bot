@@ -1,25 +1,18 @@
-pub mod betterstack;
-mod config;
-pub mod domain;
-pub mod error;
-mod logging;
-pub mod render;
-mod server;
-pub mod storage;
-pub mod telegram;
-
 use std::sync::Arc;
 use std::time::Duration;
 
+use betterstack_telegram_bot::betterstack::client::BetterStackClient;
+use betterstack_telegram_bot::betterstack::webhook::WebhookAppState;
+use betterstack_telegram_bot::config::Config;
+use betterstack_telegram_bot::logging;
+use betterstack_telegram_bot::server;
+use betterstack_telegram_bot::storage::redis::RedisStore;
+use betterstack_telegram_bot::storage::IncidentStore;
+use betterstack_telegram_bot::telegram::dispatch::{build_dispatcher, DispatcherDeps};
+use betterstack_telegram_bot::telegram::{self, TeloxideNotifier};
 use clap::Parser;
-use config::Config;
 use teloxide::prelude::*;
 use teloxide::update_listeners::webhooks;
-
-use betterstack::client::BetterStackClient;
-use storage::redis::RedisStore;
-use telegram::dispatch::{build_dispatcher, DispatcherDeps};
-use telegram::TeloxideNotifier;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_secs(config.incident_ttl_secs),
         )
         .await?,
-    ) as Arc<dyn storage::IncidentStore>;
+    ) as Arc<dyn IncidentStore>;
 
     let bot = Bot::new(config.bot_token.expose().to_string());
     let betterstack_client = BetterStackClient::new(
@@ -57,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (listener, stop_flag, teloxide_router) = webhooks::axum_no_setup(options);
 
-    let webhook_state = betterstack::webhook::WebhookAppState {
+    let webhook_state = WebhookAppState {
         store: store.clone(),
         notifier: notifier.clone(),
         webhook_secret: config.betterstack_webhook_secret.expose().to_string(),

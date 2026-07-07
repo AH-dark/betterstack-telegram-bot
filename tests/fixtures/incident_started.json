@@ -1,0 +1,16 @@
+{
+  "event": "incident_started",
+  "data": {
+    "id": "12345",
+    "type": "incident",
+    "attributes": {
+      "name": "Homepage down",
+      "url": "https://example.com",
+      "cause": "Status 500",
+      "started_at": "2026-01-01T00:00:00Z",
+      "acknowledged_at": null,
+      "resolved_at": null
+    }
+  },
+  "relationships": { "monitor": { "data": { "id": "4", "type": "monitor" } } }
+}
