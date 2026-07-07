@@ -2,6 +2,7 @@ mod config;
 pub mod domain;
 pub mod error;
 mod logging;
+pub mod storage;
 
 use clap::Parser;
 use config::Config;
