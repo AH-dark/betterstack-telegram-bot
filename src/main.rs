@@ -1,4 +1,5 @@
 mod config;
+pub mod domain;
 pub mod error;
 mod logging;
 
