@@ -3,6 +3,7 @@ mod config;
 pub mod domain;
 pub mod error;
 mod logging;
+pub mod render;
 pub mod storage;
 
 use clap::Parser;
