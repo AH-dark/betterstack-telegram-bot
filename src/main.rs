@@ -5,6 +5,7 @@ pub mod error;
 mod logging;
 pub mod render;
 pub mod storage;
+pub mod telegram;
 
 use clap::Parser;
 use config::Config;
