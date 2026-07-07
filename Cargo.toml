@@ -1,6 +1,6 @@
 [package]
 name = "betterstack-telegram-bot"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Better Stack incident → Telegram bot with two-way sync"
