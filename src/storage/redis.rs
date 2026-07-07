@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 
 use super::{IncidentStore, LockGuard};
 use crate::domain::incident::{IncidentRecord, IncidentStatus};
@@ -333,14 +333,18 @@ mod tests {
         assert_eq!(got.status, rec.status);
         assert_eq!(got.started_at, rec.started_at);
 
-        assert!(store
-            .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
-            .await
-            .unwrap());
-        assert!(!store
-            .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
-            .await
-            .unwrap());
+        assert!(
+            store
+                .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
 
         let first = store
             .try_lock("incident-1", Duration::from_secs(60))
@@ -355,20 +359,24 @@ mod tests {
         assert!(second.is_none());
 
         store.release_lock(&first.unwrap()).await.unwrap();
-        assert!(store
-            .try_lock("incident-1", Duration::from_secs(60))
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            store
+                .try_lock("incident-1", Duration::from_secs(60))
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         store
             .unmark_event("incident-1", "incident_started")
             .await
             .unwrap();
-        assert!(store
-            .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
-            .await
-            .unwrap());
+        assert!(
+            store
+                .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

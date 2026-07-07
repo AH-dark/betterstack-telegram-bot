@@ -115,11 +115,11 @@ impl IncidentStore for MemoryStore {
         let mut inner = self.lock_inner()?;
         let now = Instant::now();
 
-        if let Some(entry) = inner.locks.get(id) {
-            if entry.expires_at > now {
-                let _held_token = &entry.token;
-                return Ok(None);
-            }
+        if let Some(entry) = inner.locks.get(id)
+            && entry.expires_at > now
+        {
+            let _held_token = &entry.token;
+            return Ok(None);
         }
 
         let token = SystemTime::now()
@@ -338,23 +338,29 @@ mod tests {
         let store = MemoryStore::new();
         let ttl = Duration::from_secs(10);
 
-        assert!(store
-            .mark_event_once("inc8", "incident_started", ttl)
-            .await
-            .unwrap());
-        assert!(!store
-            .mark_event_once("inc8", "incident_started", ttl)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .mark_event_once("inc8", "incident_started", ttl)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mark_event_once("inc8", "incident_started", ttl)
+                .await
+                .unwrap()
+        );
 
         store
             .unmark_event("inc8", "incident_started")
             .await
             .unwrap();
 
-        assert!(store
-            .mark_event_once("inc8", "incident_started", ttl)
-            .await
-            .unwrap());
+        assert!(
+            store
+                .mark_event_once("inc8", "incident_started", ttl)
+                .await
+                .unwrap()
+        );
     }
 }
