@@ -196,7 +196,7 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 1. Merge conventional-commit PRs to `main` (e.g. `feat: ...`, `fix: ...`)
 2. release-please maintains a release PR that bumps `Cargo.toml` version and `CHANGELOG.md`
 3. Merging the release PR tags `v{X.Y.Z}` and creates a GitHub Release
-4. The `docker-publish` workflow fires on release and pushes a multi-arch image to `ghcr.io/ah-dark/betterstack-telegram-bot`
+4. The release workflow pushes a linux/amd64 image to `ghcr.io/ah-dark/betterstack-telegram-bot`
 
 ## License
 
