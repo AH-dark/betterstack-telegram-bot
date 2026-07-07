@@ -4,12 +4,12 @@ use std::time::Duration;
 use teloxide::adaptors::Throttle;
 use teloxide::prelude::*;
 use teloxide::types::CallbackQuery;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::Notifier;
 use crate::betterstack::client::BetterStackClient;
-use crate::domain::callback::{decode, Action};
+use crate::domain::callback::{Action, decode};
 use crate::domain::incident::{self, Trigger};
 use crate::storage::IncidentStore;
 
@@ -173,10 +173,10 @@ async fn process_locked_callback(
         }
     };
 
-    if let (Some(chat_id), Some(message_id)) = (updated.chat_id, updated.message_id) {
-        if let Err(err) = notifier.edit_incident(chat_id, message_id, &updated).await {
-            tracing::error!(error = %err, incident_id = %incident_id, "failed to edit Telegram message in callback handler");
-        }
+    if let (Some(chat_id), Some(message_id)) = (updated.chat_id, updated.message_id)
+        && let Err(err) = notifier.edit_incident(chat_id, message_id, &updated).await
+    {
+        tracing::error!(error = %err, incident_id = %incident_id, "failed to edit Telegram message in callback handler");
     }
 
     CallbackAnswer::Success

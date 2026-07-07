@@ -1,5 +1,5 @@
 use reqwest::{Client, StatusCode};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 use url::Url;
 
@@ -185,10 +185,12 @@ mod tests {
         let result = client.acknowledge("12345", None).await;
 
         assert!(result.is_err(), "500 should surface as error after retries");
-        assert!(result
-            .expect_err("expected Better Stack API error")
-            .to_string()
-            .contains("Better Stack API returned 500"));
+        assert!(
+            result
+                .expect_err("expected Better Stack API error")
+                .to_string()
+                .contains("Better Stack API returned 500")
+        );
     }
 
     #[test]

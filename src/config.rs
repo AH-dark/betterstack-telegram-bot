@@ -206,25 +206,29 @@ mod tests {
     #[test]
     fn env_vars_populate_config_fields() {
         let _guard = ENV_LOCK.lock().expect("env lock poisoned");
-        for name in CONFIG_ENV_VARS {
-            env::remove_var(name);
-        }
+        // SAFETY: ENV_LOCK is held for this test's duration, serializing all environment
+        // mutation across the test suite; no other thread reads or writes the environment.
+        unsafe {
+            for name in CONFIG_ENV_VARS {
+                env::remove_var(name);
+            }
 
-        env::set_var("TELEGRAM_BOT_TOKEN", "bot-token-from-env");
-        env::set_var("TELEGRAM_CHAT_ID", "-100987654321");
-        env::set_var("PUBLIC_URL", "https://bot.example.com");
-        env::set_var("TELEGRAM_WEBHOOK_PATH", "/telegram/custom");
-        env::set_var("TELEGRAM_SECRET_TOKEN", "telegram-secret-from-env");
-        env::set_var("BETTERSTACK_WEBHOOK_PATH", "/betterstack/custom");
-        env::set_var("BETTERSTACK_WEBHOOK_SECRET", "webhook-secret-from-env");
-        env::set_var("BETTERSTACK_API_TOKEN", "api-token-from-env");
-        env::set_var("BETTERSTACK_API_BASE", "https://uptime.example.test");
-        env::set_var("REDIS_URL", "redis://localhost:6379/1");
-        env::set_var("REDIS_KEY_PREFIX", "custom");
-        env::set_var("INCIDENT_TTL_SECS", "60");
-        env::set_var("BIND_ADDR", "127.0.0.1:9000");
-        env::set_var("LOG_FORMAT", "pretty");
-        env::set_var("RUST_LOG", "debug");
+            env::set_var("TELEGRAM_BOT_TOKEN", "bot-token-from-env");
+            env::set_var("TELEGRAM_CHAT_ID", "-100987654321");
+            env::set_var("PUBLIC_URL", "https://bot.example.com");
+            env::set_var("TELEGRAM_WEBHOOK_PATH", "/telegram/custom");
+            env::set_var("TELEGRAM_SECRET_TOKEN", "telegram-secret-from-env");
+            env::set_var("BETTERSTACK_WEBHOOK_PATH", "/betterstack/custom");
+            env::set_var("BETTERSTACK_WEBHOOK_SECRET", "webhook-secret-from-env");
+            env::set_var("BETTERSTACK_API_TOKEN", "api-token-from-env");
+            env::set_var("BETTERSTACK_API_BASE", "https://uptime.example.test");
+            env::set_var("REDIS_URL", "redis://localhost:6379/1");
+            env::set_var("REDIS_KEY_PREFIX", "custom");
+            env::set_var("INCIDENT_TTL_SECS", "60");
+            env::set_var("BIND_ADDR", "127.0.0.1:9000");
+            env::set_var("LOG_FORMAT", "pretty");
+            env::set_var("RUST_LOG", "debug");
+        }
 
         let config = Config::try_parse_from(["betterstack-telegram-bot"]).expect("config parses");
 
@@ -256,8 +260,11 @@ mod tests {
         assert_eq!(config.log_format, LogFormat::Pretty);
         assert_eq!(config.log_level, "debug");
 
-        for name in CONFIG_ENV_VARS {
-            env::remove_var(name);
+        // SAFETY: guarded by ENV_LOCK — see the block above.
+        unsafe {
+            for name in CONFIG_ENV_VARS {
+                env::remove_var(name);
+            }
         }
     }
 }
