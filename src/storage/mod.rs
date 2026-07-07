@@ -6,6 +6,7 @@ use crate::domain::incident::{IncidentRecord, IncidentStatus};
 use crate::error::Result;
 
 pub mod memory;
+pub mod redis;
 
 /// Guard returned by try_lock; dropping it releases the lock.
 pub struct LockGuard {
