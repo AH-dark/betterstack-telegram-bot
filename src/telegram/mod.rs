@@ -73,8 +73,12 @@ impl Notifier for TeloxideNotifier {
             Ok(_) => Ok(()),
             Err(e) => {
                 let err_str = e.to_string();
-                if is_benign_edit_error(&err_str) {
-                    tracing::debug!(error = %e, "ignoring benign Telegram edit error");
+                if is_message_not_modified(&err_str) {
+                    tracing::debug!(error = %e, "ignoring unchanged Telegram edit");
+                    Ok(())
+                } else if is_message_not_found(&err_str) {
+                    // v1 skips resend for missing edits; warn so operators can see stale coordinates.
+                    tracing::warn!(error = %e, "Telegram message to edit was not found");
                     Ok(())
                 } else {
                     Err(AppError::Telegram(err_str))
@@ -84,10 +88,12 @@ impl Notifier for TeloxideNotifier {
     }
 }
 
-fn is_benign_edit_error(error: &str) -> bool {
+fn is_message_not_modified(error: &str) -> bool {
     error.contains("message is not modified")
-        || error.contains("message to edit not found")
-        || error.contains("MESSAGE_ID_INVALID")
+}
+
+fn is_message_not_found(error: &str) -> bool {
+    error.contains("message to edit not found") || error.contains("MESSAGE_ID_INVALID")
 }
 
 /// Recording fake Notifier for tests.

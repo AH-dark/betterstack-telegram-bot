@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use teloxide::adaptors::Throttle;
 use teloxide::prelude::*;
@@ -11,6 +12,11 @@ use crate::betterstack::client::BetterStackClient;
 use crate::domain::callback::{decode, Action};
 use crate::domain::incident::{self, Trigger};
 use crate::storage::IncidentStore;
+
+enum CallbackAnswer {
+    Success,
+    Alert(&'static str),
+}
 
 fn actor_name(query: &CallbackQuery) -> String {
     query
@@ -44,44 +50,97 @@ pub async fn callback_handler(
             tracing::warn!(data = ?query.data, "malformed callback data");
             let _ = bot
                 .answer_callback_query(query_id)
-                .text("Invalid button data. Please try again.")
+                .text("Invalid button data.")
                 .show_alert(true)
                 .await;
             return Ok(());
         }
     };
 
-    let _ = bot.answer_callback_query(query_id.clone()).await;
+    let guard = match store.try_lock(&incident_id, Duration::from_secs(15)).await {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            tracing::warn!(incident_id = %incident_id, "incident lock is held during callback");
+            let _ = bot
+                .answer_callback_query(query_id)
+                .text("Incident is being updated. Please try again.")
+                .show_alert(true)
+                .await;
+            return Ok(());
+        }
+        Err(err) => {
+            tracing::error!(error = %err, incident_id = %incident_id, "store lock failed in callback handler");
+            let _ = bot
+                .answer_callback_query(query_id)
+                .text("Failed to update incident. Please try again.")
+                .show_alert(true)
+                .await;
+            return Ok(());
+        }
+    };
 
-    let actor = actor_name(&query);
+    let answer = process_locked_callback(
+        action,
+        &incident_id,
+        &query,
+        store.as_ref(),
+        notifier.as_ref(),
+        &betterstack_client,
+    )
+    .await;
+
+    if let Err(err) = store.release_lock(&guard).await {
+        tracing::debug!(error = %err, incident_id = %incident_id, "failed to release callback incident lock");
+    }
+
+    match answer {
+        CallbackAnswer::Success => {
+            let _ = bot.answer_callback_query(query_id).text("Done").await;
+        }
+        CallbackAnswer::Alert(text) => {
+            let _ = bot
+                .answer_callback_query(query_id)
+                .text(text)
+                .show_alert(true)
+                .await;
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_locked_callback(
+    action: Action,
+    incident_id: &str,
+    query: &CallbackQuery,
+    store: &dyn IncidentStore,
+    notifier: &dyn Notifier,
+    betterstack_client: &BetterStackClient,
+) -> CallbackAnswer {
+    let actor = actor_name(query);
     let api_result = match action {
         Action::Acknowledge => {
             betterstack_client
-                .acknowledge(&incident_id, Some(&actor))
+                .acknowledge(incident_id, Some(&actor))
                 .await
         }
-        Action::Resolve => betterstack_client.resolve(&incident_id, Some(&actor)).await,
+        Action::Resolve => betterstack_client.resolve(incident_id, Some(&actor)).await,
     };
 
     if let Err(err) = api_result {
         tracing::error!(error = %err, incident_id = %incident_id, "Better Stack API call failed");
-        let _ = bot
-            .answer_callback_query(query_id)
-            .text("Failed to update incident. Please try again.")
-            .show_alert(true)
-            .await;
-        return Ok(());
+        return CallbackAnswer::Alert("Failed to update incident. Please try again.");
     }
 
-    let current = match store.get(&incident_id).await {
+    let current = match store.get(incident_id).await {
         Ok(Some(record)) => record,
         Ok(None) => {
             tracing::warn!(incident_id = %incident_id, "incident not found in store for callback");
-            return Ok(());
+            return CallbackAnswer::Alert("Incident not found. Please try again.");
         }
         Err(err) => {
             tracing::error!(error = %err, incident_id = %incident_id, "store read failed in callback handler");
-            return Ok(());
+            return CallbackAnswer::Alert("Failed to update incident. Please try again.");
         }
     };
 
@@ -94,23 +153,23 @@ pub async fn callback_handler(
     if changed {
         let now = now_rfc3339();
         if let Err(err) = store
-            .set_status(&incident_id, new_status, Some(&actor), &now)
+            .set_status(incident_id, new_status, Some(&actor), &now)
             .await
         {
             tracing::error!(error = %err, incident_id = %incident_id, "store status update failed in callback handler");
-            return Ok(());
+            return CallbackAnswer::Alert("Failed to update incident. Please try again.");
         }
     }
 
-    let updated = match store.get(&incident_id).await {
+    let updated = match store.get(incident_id).await {
         Ok(Some(record)) => record,
         Ok(None) => {
             tracing::warn!(incident_id = %incident_id, "incident disappeared after callback update");
-            return Ok(());
+            return CallbackAnswer::Alert("Incident not found. Please try again.");
         }
         Err(err) => {
             tracing::error!(error = %err, incident_id = %incident_id, "store read after update failed in callback handler");
-            return Ok(());
+            return CallbackAnswer::Alert("Failed to update incident. Please try again.");
         }
     };
 
@@ -120,7 +179,7 @@ pub async fn callback_handler(
         }
     }
 
-    Ok(())
+    CallbackAnswer::Success
 }
 
 #[cfg(test)]

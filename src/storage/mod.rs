@@ -41,4 +41,11 @@ pub trait IncidentStore: Send + Sync {
     /// Try to acquire a short per-incident lock.
     /// Returns Some(LockGuard) if acquired, None if already locked.
     async fn try_lock(&self, id: &str, ttl: Duration) -> Result<Option<LockGuard>>;
+
+    /// Release a previously acquired lock (compare-and-delete by token).
+    async fn release_lock(&self, guard: &LockGuard) -> Result<()>;
+
+    /// Remove a dedup marker so a failed delivery can be retried (or a reopened
+    /// incident can process a fresh terminal event).
+    async fn unmark_event(&self, id: &str, event: &str) -> Result<()>;
 }

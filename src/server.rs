@@ -1,3 +1,7 @@
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+use std::io::Read;
+
 use axum::http::StatusCode;
 use axum::{
     routing::{get, post},
@@ -15,23 +19,70 @@ async fn healthz() -> StatusCode {
     StatusCode::OK
 }
 
+/// Resolve the effective Telegram secret_token: the configured value, or a
+/// freshly generated random token when unset. The same value MUST be used for
+/// setWebhook and the update listener.
+pub fn resolve_secret_token(config: &Config) -> String {
+    if let Some(secret) = &config.telegram_secret_token {
+        return secret.expose().to_string();
+    }
+
+    match random_token_from_urandom() {
+        Ok(token) => token,
+        Err(_) => random_token_from_random_state(),
+    }
+}
+
+fn random_token_from_urandom() -> std::io::Result<String> {
+    let mut bytes = [0u8; 32];
+    let mut file = std::fs::File::open("/dev/urandom")?;
+    file.read_exact(&mut bytes)?;
+    Ok(hex_encode(&bytes))
+}
+
+fn random_token_from_random_state() -> String {
+    let mut bytes = [0u8; 32];
+
+    for (index, chunk) in bytes.chunks_mut(8).enumerate() {
+        let state = RandomState::new();
+        let mut hasher = state.build_hasher();
+        hasher.write_usize(index);
+        let nanos = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos(),
+            Err(_) => 0,
+        };
+        hasher.write_u128(nanos);
+        hasher.write_usize(std::process::id() as usize);
+        let value = hasher.finish().to_ne_bytes();
+        chunk.copy_from_slice(&value[..chunk.len()]);
+    }
+
+    hex_encode(&bytes)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 /// Register the Telegram webhook with the Bot API.
-pub async fn register_webhook(bot: &Bot, config: &Config) -> Result<()> {
+pub async fn register_webhook(bot: &Bot, config: &Config, secret_token: &str) -> Result<()> {
     let webhook_url = config
         .public_url
         .join(config.telegram_webhook_path.trim_start_matches('/'))
         .map_err(|e| AppError::Config(e.to_string()))?;
 
-    let mut set_webhook = bot.set_webhook(webhook_url).allowed_updates(vec![
-        teloxide::types::AllowedUpdate::CallbackQuery,
-        teloxide::types::AllowedUpdate::Message,
-    ]);
-
-    if let Some(secret) = &config.telegram_secret_token {
-        set_webhook = set_webhook.secret_token(secret.expose().to_string());
-    }
-
-    set_webhook
+    bot.set_webhook(webhook_url)
+        .allowed_updates(vec![
+            teloxide::types::AllowedUpdate::CallbackQuery,
+            teloxide::types::AllowedUpdate::Message,
+        ])
+        .secret_token(secret_token.to_string())
         .await
         .map_err(|e| AppError::Telegram(e.to_string()))?;
 
@@ -169,8 +220,9 @@ mod tests {
         let bot = Bot::new("test-token")
             .set_api_url(reqwest::Url::parse(&server.uri()).expect("valid mock server URL"));
         let config = test_config(&server.uri());
+        let secret_token = resolve_secret_token(&config);
 
-        register_webhook(&bot, &config)
+        register_webhook(&bot, &config, &secret_token)
             .await
             .expect("webhook registration should succeed");
 
@@ -188,5 +240,26 @@ mod tests {
         assert!(body.contains(r#"["callback_query","message"]"#));
         assert!(body.contains("name=\"secret_token\""));
         assert!(body.contains("telegram_secret"));
+    }
+
+    #[test]
+    fn resolve_secret_token_uses_configured_value() {
+        let config = test_config("https://uptime.example.test");
+
+        assert_eq!(resolve_secret_token(&config), "telegram_secret");
+    }
+
+    #[test]
+    fn resolve_secret_token_generates_hex_value_when_unset() {
+        let mut config = test_config("https://uptime.example.test");
+        config.telegram_secret_token = None;
+
+        let token = resolve_secret_token(&config);
+
+        assert_eq!(token.len(), 64);
+        assert!(token
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert!(token.bytes().any(|byte| byte != b'0'));
     }
 }

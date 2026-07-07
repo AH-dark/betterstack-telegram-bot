@@ -171,6 +171,7 @@ impl IncidentStore for RedisStore {
 
         redis::pipe()
             .atomic()
+            .del(&key)
             .hset_multiple(&key, &fields)
             .expire(&key, ttl_secs(self.incident_ttl) as i64)
             .query_async::<()>(&mut conn)
@@ -258,20 +259,24 @@ impl IncidentStore for RedisStore {
             token,
         }))
     }
-}
 
-impl RedisStore {
-    pub async fn release_lock(&self, guard: &LockGuard) -> Result<bool> {
+    async fn release_lock(&self, guard: &LockGuard) -> Result<()> {
         let key = self.lock_key(&guard.incident_id);
         let mut conn = self.conn.clone();
-        let deleted: i32 = redis::Script::new(LOCK_RELEASE_SCRIPT)
+        let _deleted: i32 = redis::Script::new(LOCK_RELEASE_SCRIPT)
             .key(key)
             .arg(&guard.token)
             .invoke_async(&mut conn)
             .await
             .map_err(AppError::Redis)?;
 
-        Ok(deleted == 1)
+        Ok(())
+    }
+
+    async fn unmark_event(&self, id: &str, event: &str) -> Result<()> {
+        let key = self.dedup_key(id, event);
+        let mut conn = self.conn.clone();
+        conn.del(key).await.map_err(AppError::Redis)
     }
 }
 
@@ -349,11 +354,47 @@ mod tests {
             .unwrap();
         assert!(second.is_none());
 
-        assert!(store.release_lock(&first.unwrap()).await.unwrap());
+        store.release_lock(&first.unwrap()).await.unwrap();
         assert!(store
             .try_lock("incident-1", Duration::from_secs(60))
             .await
             .unwrap()
             .is_some());
+
+        store
+            .unmark_event("incident-1", "incident_started")
+            .await
+            .unwrap();
+        assert!(store
+            .mark_event_once("incident-1", "incident_started", Duration::from_secs(60))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Redis on 127.0.0.1:6379"]
+    async fn upsert_clears_removed_optional_fields() {
+        let store = test_store("clear_optional_fields").await;
+        let mut rec = make_record("incident-1");
+        rec.status = IncidentStatus::Resolved;
+        rec.acknowledged_at = Some("2026-07-07T00:01:00Z".to_string());
+        rec.acknowledged_by = Some("alice".to_string());
+        rec.resolved_at = Some("2026-07-07T00:02:00Z".to_string());
+        rec.resolved_by = Some("bob".to_string());
+        store.upsert(&rec).await.unwrap();
+
+        rec.status = IncidentStatus::Started;
+        rec.acknowledged_at = None;
+        rec.acknowledged_by = None;
+        rec.resolved_at = None;
+        rec.resolved_by = None;
+        store.upsert(&rec).await.unwrap();
+
+        let got = store.get("incident-1").await.unwrap().unwrap();
+        assert_eq!(got.status, IncidentStatus::Started);
+        assert!(got.acknowledged_at.is_none());
+        assert!(got.acknowledged_by.is_none());
+        assert!(got.resolved_at.is_none());
+        assert!(got.resolved_by.is_none());
     }
 }

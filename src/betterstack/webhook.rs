@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use crate::domain::incident::{self, IncidentRecord, IncidentStatus, Trigger};
+use crate::error::{AppError, Result};
 use crate::storage::IncidentStore;
 use crate::telegram::Notifier;
 
@@ -62,7 +63,42 @@ pub async fn betterstack_webhook_handler(
     };
 
     let incident_id = &payload.data.id;
-    let attrs = &payload.data.attributes;
+
+    let guard = match state
+        .store
+        .try_lock(incident_id, Duration::from_secs(15))
+        .await
+    {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            tracing::warn!(incident_id = %incident_id, "incident lock is held by another worker");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        Err(err) => {
+            tracing::error!(error = %err, incident_id = %incident_id, "store error in try_lock");
+            return AppError::Internal("failed to acquire incident lock".to_string())
+                .into_response();
+        }
+    };
+
+    let response = process_locked_webhook(&state, &payload, &trigger).await;
+
+    if let Err(err) = state.store.release_lock(&guard).await {
+        tracing::debug!(error = %err, incident_id = %incident_id, "failed to release incident lock");
+    }
+
+    match response {
+        Ok(status) => status.into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn process_locked_webhook(
+    state: &WebhookAppState,
+    payload: &WebhookPayload,
+    trigger: &Trigger,
+) -> Result<StatusCode> {
+    let incident_id = &payload.data.id;
 
     let is_new = match state
         .store
@@ -72,14 +108,35 @@ pub async fn betterstack_webhook_handler(
         Ok(is_new) => is_new,
         Err(err) => {
             tracing::error!(error = %err, "store error in mark_event_once");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return Err(AppError::Internal(
+                "failed to mark webhook event".to_string(),
+            ));
         }
     };
 
     if !is_new {
         tracing::debug!(incident_id = %incident_id, event = %payload.event, "deduped webhook");
-        return StatusCode::OK.into_response();
+        return Ok(StatusCode::OK);
     }
+
+    let result = process_marked_webhook(state, payload, trigger).await;
+
+    if result.is_err() {
+        if let Err(err) = state.store.unmark_event(incident_id, &payload.event).await {
+            tracing::debug!(error = %err, incident_id = %incident_id, event = %payload.event, "failed to unmark webhook dedup key");
+        }
+    }
+
+    result
+}
+
+async fn process_marked_webhook(
+    state: &WebhookAppState,
+    payload: &WebhookPayload,
+    trigger: &Trigger,
+) -> Result<StatusCode> {
+    let incident_id = &payload.data.id;
+    let attrs = &payload.data.attributes;
 
     let mut rec = match state.store.get(incident_id).await {
         Ok(Some(rec)) => rec,
@@ -94,7 +151,7 @@ pub async fn betterstack_webhook_handler(
         },
         Err(err) => {
             tracing::error!(error = %err, "store error in get");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return Err(AppError::Internal("failed to load incident".to_string()));
         }
     };
 
@@ -117,12 +174,27 @@ pub async fn betterstack_webhook_handler(
         rec.resolved_by = Some(value.clone());
     }
 
-    let (new_status, _changed) = incident::next(rec.status, &trigger);
+    let (new_status, _changed) = incident::next(rec.status, trigger);
     rec.status = new_status;
+
+    if new_status == IncidentStatus::Started {
+        rec.acknowledged_at = None;
+        rec.acknowledged_by = None;
+        rec.resolved_at = None;
+        rec.resolved_by = None;
+    }
 
     if let Err(err) = state.store.upsert(&rec).await {
         tracing::error!(error = %err, "store error in upsert");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return Err(AppError::Internal("failed to store incident".to_string()));
+    }
+
+    if new_status == IncidentStatus::Started {
+        for stale_event in ["incident_resolved", "incident_acknowledged"] {
+            if let Err(err) = state.store.unmark_event(incident_id, stale_event).await {
+                tracing::debug!(error = %err, incident_id = %incident_id, event = stale_event, "failed to clear stale terminal dedup key");
+            }
+        }
     }
 
     match (rec.chat_id, rec.message_id) {
@@ -154,7 +226,7 @@ pub async fn betterstack_webhook_handler(
         }
     }
 
-    StatusCode::OK.into_response()
+    Ok(StatusCode::OK)
 }
 
 /// Top-level Better Stack outgoing webhook payload.
@@ -429,10 +501,73 @@ mod handler_tests {
     use axum::http::Request;
     use axum::routing::post;
     use axum::Router;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
+    use crate::error::{AppError, Result};
     use crate::storage::memory::MemoryStore;
+    use crate::storage::LockGuard;
     use crate::telegram::{FakeNotifier, NotifierCall};
+
+    struct FailingGetStore {
+        inner: MemoryStore,
+        unmark_calls: AtomicUsize,
+    }
+
+    impl FailingGetStore {
+        fn new() -> Self {
+            Self {
+                inner: MemoryStore::new(),
+                unmark_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn unmark_calls(&self) -> usize {
+            self.unmark_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IncidentStore for FailingGetStore {
+        async fn get(&self, _id: &str) -> Result<Option<IncidentRecord>> {
+            Err(AppError::Internal("forced get failure".to_string()))
+        }
+
+        async fn upsert(&self, rec: &IncidentRecord) -> Result<()> {
+            self.inner.upsert(rec).await
+        }
+
+        async fn set_message_id(&self, id: &str, chat_id: i64, message_id: i32) -> Result<()> {
+            self.inner.set_message_id(id, chat_id, message_id).await
+        }
+
+        async fn set_status(
+            &self,
+            id: &str,
+            status: IncidentStatus,
+            actor: Option<&str>,
+            at: &str,
+        ) -> Result<()> {
+            self.inner.set_status(id, status, actor, at).await
+        }
+
+        async fn mark_event_once(&self, id: &str, event: &str, ttl: Duration) -> Result<bool> {
+            self.inner.mark_event_once(id, event, ttl).await
+        }
+
+        async fn try_lock(&self, id: &str, ttl: Duration) -> Result<Option<LockGuard>> {
+            self.inner.try_lock(id, ttl).await
+        }
+
+        async fn release_lock(&self, guard: &LockGuard) -> Result<()> {
+            self.inner.release_lock(guard).await
+        }
+
+        async fn unmark_event(&self, id: &str, event: &str) -> Result<()> {
+            self.unmark_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.unmark_event(id, event).await
+        }
+    }
 
     fn make_app(secret: &str) -> Router {
         let store = Arc::new(MemoryStore::new()) as Arc<dyn IncidentStore>;
@@ -511,6 +646,21 @@ mod handler_tests {
                 "started_at": "2026-01-01T00:00:00Z",
                 "resolved_at": "2026-01-01T00:10:00Z",
                 "resolved_by": "bob"
+            }
+        },
+        "relationships": {}
+    }"#;
+
+    const INCIDENT_REOPENED_JSON: &str = r#"{
+        "event": "incident_reopened",
+        "data": {
+            "id": "12345",
+            "type": "incident",
+            "attributes": {
+                "name": "Homepage down",
+                "url": "https://example.com",
+                "cause": "Status 500",
+                "started_at": "2026-01-01T00:15:00Z"
             }
         },
         "relationships": {}
@@ -660,5 +810,108 @@ mod handler_tests {
         } else {
             panic!("expected Edit call, got {:?}", calls[1]);
         }
+    }
+
+    #[tokio::test]
+    async fn lock_contention_returns_503_for_retry() {
+        let store = Arc::new(MemoryStore::new());
+        let guard = store
+            .try_lock("12345", Duration::from_secs(60))
+            .await
+            .expect("lock should succeed")
+            .expect("lock should be acquired");
+        let notifier = Arc::new(FakeNotifier::new(-100123, 42));
+        let (app, store, notifier) = make_app_with_parts("secret", store, notifier);
+
+        let resp = app
+            .oneshot(webhook_request(Some("secret"), INCIDENT_STARTED_JSON))
+            .await
+            .expect("handler should respond");
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(notifier.recorded_calls().is_empty());
+        store
+            .release_lock(&guard)
+            .await
+            .expect("lock should release");
+    }
+
+    #[tokio::test]
+    async fn processing_failure_unmarks_dedup_for_retry() {
+        let store = Arc::new(FailingGetStore::new());
+        let notifier = Arc::new(FakeNotifier::new(-100123, 42));
+        let app = make_router(
+            "secret",
+            store.clone() as Arc<dyn IncidentStore>,
+            notifier as Arc<dyn Notifier>,
+        );
+
+        let resp = app
+            .oneshot(webhook_request(Some("secret"), INCIDENT_STARTED_JSON))
+            .await
+            .expect("handler should respond");
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(store.unmark_calls(), 1);
+        assert!(store
+            .mark_event_once("12345", "incident_started", Duration::from_secs(60))
+            .await
+            .expect("mark should succeed"));
+    }
+
+    #[tokio::test]
+    async fn reopen_clears_terminal_metadata_and_terminal_dedup() {
+        let store = Arc::new(MemoryStore::new());
+        let notifier = Arc::new(FakeNotifier::new(-100123, 42));
+        let (app, store, _notifier) = make_app_with_parts("secret", store, notifier);
+
+        let mut rec = IncidentRecord {
+            id: "12345".to_string(),
+            name: "Homepage down".to_string(),
+            url: "https://example.com".to_string(),
+            cause: "Status 200".to_string(),
+            status: IncidentStatus::Resolved,
+            chat_id: Some(-100123),
+            message_id: Some(42),
+            started_at: Some("2026-01-01T00:00:00Z".to_string()),
+            acknowledged_at: Some("2026-01-01T00:05:00Z".to_string()),
+            acknowledged_by: Some("alice".to_string()),
+            resolved_at: Some("2026-01-01T00:10:00Z".to_string()),
+            resolved_by: Some("bob".to_string()),
+        };
+        store.upsert(&rec).await.expect("record should upsert");
+        assert!(store
+            .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
+            .await
+            .expect("mark should succeed"));
+        assert!(store
+            .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
+            .await
+            .expect("mark should succeed"));
+
+        let resp = app
+            .oneshot(webhook_request(Some("secret"), INCIDENT_REOPENED_JSON))
+            .await
+            .expect("handler should respond");
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        rec = store
+            .get("12345")
+            .await
+            .expect("store read should succeed")
+            .expect("record should exist");
+        assert_eq!(rec.status, IncidentStatus::Started);
+        assert!(rec.acknowledged_at.is_none());
+        assert!(rec.acknowledged_by.is_none());
+        assert!(rec.resolved_at.is_none());
+        assert!(rec.resolved_by.is_none());
+        assert!(store
+            .mark_event_once("12345", "incident_resolved", Duration::from_secs(60))
+            .await
+            .expect("mark should succeed"));
+        assert!(store
+            .mark_event_once("12345", "incident_acknowledged", Duration::from_secs(60))
+            .await
+            .expect("mark should succeed"));
     }
 }

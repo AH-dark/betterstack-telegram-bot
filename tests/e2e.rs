@@ -213,6 +213,11 @@ async fn callback_acknowledge_syncs_betterstack_store_and_message() {
             .and_then(|value| value.to_str().ok()),
         Some("Bearer betterstack-token")
     );
+    let telegram_requests = telegram_mock
+        .received_requests()
+        .await
+        .expect("request recording should be enabled");
+    assert_eq!(telegram_requests.len(), 1);
     let body = String::from_utf8_lossy(&betterstack_requests[0].body);
     assert!(body.contains("acknowledged_by"));
     assert!(body.contains("alice"));
@@ -323,4 +328,43 @@ async fn malformed_callback_is_answered_without_betterstack_or_edit() {
         .expect("request recording should be enabled");
     assert!(betterstack_requests.is_empty());
     assert!(notifier.recorded_calls().is_empty());
+}
+
+#[tokio::test]
+async fn callback_api_failure_answers_once_without_editing() {
+    let betterstack_mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v3/incidents/12345/acknowledge"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&betterstack_mock)
+        .await;
+    let telegram_mock = MockServer::start().await;
+    mount_answer_callback_stub(&telegram_mock).await;
+
+    let store = Arc::new(MemoryStore::new());
+    prepopulate_started(&store).await;
+    let notifier = Arc::new(FakeNotifier::new(-100123, 42));
+
+    callback_handler(
+        test_bot(&telegram_mock),
+        make_callback_query("ack:12345"),
+        store.clone() as Arc<dyn IncidentStore>,
+        notifier.clone() as Arc<dyn Notifier>,
+        betterstack_client(&betterstack_mock),
+    )
+    .await
+    .expect("callback should succeed");
+
+    let telegram_requests = telegram_mock
+        .received_requests()
+        .await
+        .expect("request recording should be enabled");
+    assert_eq!(telegram_requests.len(), 1);
+    assert!(notifier.recorded_calls().is_empty());
+    let rec = store
+        .get("12345")
+        .await
+        .expect("store read should succeed")
+        .expect("record should exist");
+    assert_eq!(rec.status, IncidentStatus::Started);
 }

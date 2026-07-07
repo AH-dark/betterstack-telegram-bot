@@ -36,17 +36,16 @@ async fn main() -> anyhow::Result<()> {
     );
     let notifier =
         Arc::new(TeloxideNotifier::new(bot.clone(), config.chat_id)) as Arc<dyn telegram::Notifier>;
+    let secret_token = server::resolve_secret_token(&config);
 
-    server::register_webhook(&bot, &config).await?;
+    server::register_webhook(&bot, &config, &secret_token).await?;
 
     let webhook_url = config
         .public_url
         .join(config.telegram_webhook_path.trim_start_matches('/'))?;
-    let mut options =
-        webhooks::Options::new(config.bind, webhook_url).path(config.telegram_webhook_path.clone());
-    if let Some(secret) = &config.telegram_secret_token {
-        options = options.secret_token(secret.expose().to_string());
-    }
+    let options = webhooks::Options::new(config.bind, webhook_url)
+        .path(config.telegram_webhook_path.clone())
+        .secret_token(secret_token.clone());
 
     let (listener, stop_flag, teloxide_router) = webhooks::axum_no_setup(options);
 

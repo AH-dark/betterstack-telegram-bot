@@ -48,9 +48,12 @@ impl BetterStackClient {
     }
 
     fn incident_action_url(&self, incident_id: &str, action: &str) -> Result<Url> {
-        self.base_url
-            .join(&format!("api/v3/incidents/{incident_id}/{action}"))
-            .map_err(|e| AppError::Internal(e.to_string()))
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| AppError::Internal("base url cannot be a base".into()))?
+            .pop_if_empty()
+            .extend(["api", "v3", "incidents", incident_id, action]);
+        Ok(url)
     }
 
     async fn post_with_retry(&self, url: Url, body: Value) -> Result<()> {
@@ -196,5 +199,20 @@ mod tests {
         let client = BetterStackClient::new(base_url, "test-token".to_string());
 
         assert_eq!(client.base_url.as_str(), "https://uptime.example.test/api/");
+    }
+
+    #[test]
+    fn incident_action_url_percent_encodes_incident_id_path_segment() {
+        let base_url: Url = "https://uptime.example.test".parse().expect("valid URL");
+        let client = BetterStackClient::new(base_url, "test-token".to_string());
+
+        let url = client
+            .incident_action_url("abc/def?x=1", "resolve")
+            .expect("url should build");
+
+        assert_eq!(
+            url.as_str(),
+            "https://uptime.example.test/api/v3/incidents/abc%2Fdef%3Fx=1/resolve"
+        );
     }
 }

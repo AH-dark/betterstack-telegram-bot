@@ -140,6 +140,25 @@ impl IncidentStore for MemoryStore {
             token,
         }))
     }
+
+    async fn release_lock(&self, guard: &LockGuard) -> Result<()> {
+        let mut inner = self.lock_inner()?;
+        if inner
+            .locks
+            .get(&guard.incident_id)
+            .is_some_and(|entry| entry.token == guard.token)
+        {
+            inner.locks.remove(&guard.incident_id);
+        }
+
+        Ok(())
+    }
+
+    async fn unmark_event(&self, id: &str, event: &str) -> Result<()> {
+        let mut inner = self.lock_inner()?;
+        inner.dedup.remove(&format!("{id}:{event}"));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -289,5 +308,53 @@ mod tests {
         let _guard = store.try_lock("inc5", ttl).await.unwrap();
         let second = store.try_lock("inc5", ttl).await.unwrap();
         assert!(second.is_none(), "second lock attempt should fail");
+    }
+
+    #[tokio::test]
+    async fn release_lock_allows_reacquire_when_token_matches() {
+        let store = MemoryStore::new();
+        let ttl = Duration::from_secs(10);
+        let guard = store.try_lock("inc6", ttl).await.unwrap().unwrap();
+
+        store.release_lock(&guard).await.unwrap();
+
+        assert!(store.try_lock("inc6", ttl).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn release_lock_keeps_lock_when_token_differs() {
+        let store = MemoryStore::new();
+        let ttl = Duration::from_secs(10);
+        let mut guard = store.try_lock("inc7", ttl).await.unwrap().unwrap();
+        guard.token = "wrong-token".to_string();
+
+        store.release_lock(&guard).await.unwrap();
+
+        assert!(store.try_lock("inc7", ttl).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unmark_event_allows_event_to_be_marked_again() {
+        let store = MemoryStore::new();
+        let ttl = Duration::from_secs(10);
+
+        assert!(store
+            .mark_event_once("inc8", "incident_started", ttl)
+            .await
+            .unwrap());
+        assert!(!store
+            .mark_event_once("inc8", "incident_started", ttl)
+            .await
+            .unwrap());
+
+        store
+            .unmark_event("inc8", "incident_started")
+            .await
+            .unwrap();
+
+        assert!(store
+            .mark_event_once("inc8", "incident_started", ttl)
+            .await
+            .unwrap());
     }
 }
