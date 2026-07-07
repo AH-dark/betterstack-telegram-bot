@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Better Stack incident → Telegram bot with two-way sync"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [[bin]]
 name = "betterstack-telegram-bot"
