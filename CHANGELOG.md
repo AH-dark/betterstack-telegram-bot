@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/AH-dark/betterstack-telegram-bot/compare/v0.2.0...v0.2.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate redis to v1 ([f4888cb](https://github.com/AH-dark/betterstack-telegram-bot/commit/f4888cba12a81b87a37652c125753414246d4f63))
+* **deps:** update rust crate redis to v1 ([84cad2e](https://github.com/AH-dark/betterstack-telegram-bot/commit/84cad2e39416ccef69b54d1a60a735aa89b02d72))
+
 ## [0.2.0](https://github.com/AH-dark/betterstack-telegram-bot/compare/v0.1.0...v0.2.0) (2026-07-07)
 
 
