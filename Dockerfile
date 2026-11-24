@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1: Chef - prepare recipe
-FROM rust:1.96-slim-bookworm AS chef
+FROM rust:1.100-slim-bookworm@sha256:bb875b0f8ce726053e259034848c471840e96bfe591fd52556178ae9a05e6126 AS chef
 RUN cargo install cargo-chef --version 0.1.71 --locked
 WORKDIR /app
 
